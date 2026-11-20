@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="theme-color" content="#171c1b">
+	<title>Factory Alert | Edge AI &amp; IoT Monitoring</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+		<symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+		<symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3m6-3v3M9 20v3m6-3v3M20 9h3m-3 6h3M1 9h3m-3 6h3M9 9h6v6H9z"/></symbol>
+		<symbol id="i-radio" viewBox="0 0 24 24"><path d="M5 8a10 10 0 0 0 0 8m14-8a10 10 0 0 1 0 8M8 10a6 6 0 0 0 0 4m8-4a6 6 0 0 1 0 4m-4-2h.01"/><circle cx="12" cy="12" r="1"/></symbol>
+		<symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 13h4"/></symbol>
+		<symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18M7 14l4-4 4 3 6-7"/></symbol>
+		<symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m6-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8m10 10v-2a4 4 0 0 0-3-3.87m-1-11.13a4 4 0 0 1 0 7.75"/></symbol>
+		<symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.8 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.8-1l-1.7.7-1.4-2.4L5.1 15a8 8 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.8-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.8 1l1.7-.7 1.4 2.4-1.4 1.1a8 8 0 0 1-.1 2Z" transform="translate(1 0) scale(.92)"/></symbol>
+		<symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+		<symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+		<symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5 5 5 5-5m-5 5V3"/></symbol>
+		<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+		<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/><path d="m9 12 2 2 4-4"/></symbol>
+		<symbol id="i-brain" viewBox="0 0 24 24"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></symbol>
+		<symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+	</svg>
+
+	<main id="login-screen" class="login-screen">
+		<section class="login-panel">
+			<div class="brand-mark">F<span>A</span></div>
+			<p class="eyebrow">INDUSTRIAL EDGE AI &amp; IOT PLATFORM</p>
+			<h1>Factory Alert</h1>
+			<p class="login-copy">ESP32 + Edge Impulse + ThingsBoard.<br>Real-time telemetry &amp; anomaly detection.</p>
+			<form id="login-form" class="login-form">
+				<label for="username">Username</label>
+				<input id="username" name="username" autocomplete="username" value="admin" required>
+				<label for="password">Password</label>
+				<div class="password-field"><input id="password" name="password" type="password" autocomplete="current-password" value="admin123" required><button type="button" id="password-toggle" class="text-button">Show</button></div>
+				<div class="login-options"><label class="check-label"><input type="checkbox" checked> Remember me</label><button type="button" class="text-button" id="forgot-password">Forgot password?</button></div>
+				<p id="login-error" class="form-error" role="alert"></p>
+				<button type="submit" id="login-submit" class="button button-primary login-submit">Sign in <span aria-hidden="true">→</span></button>
+			</form>
+			<div class="quick-login-box">
+				<span class="quick-login-label">QUICK ACCESS</span>
+				<div class="quick-login-actions">
+					<button type="button" class="button button-secondary" data-quick-login="Admin">Admin (Full Access)</button>
+					<button type="button" class="button button-secondary" data-quick-login="Operator">Operator (View Only)</button>
+				</div>
+			</div>
+			<p class="demo-hint">Default accounts: <b>admin / admin123</b> or <b>operator / operator123</b></p>
+			<p class="login-footer">FACTORY ALERT <span>•</span> ESP32 &amp; THINGSBOARD PRODUCTION</p>
+		</section>
+		<aside class="login-visual" aria-label="Factory operations overview">
+			<div class="visual-grid"></div><div class="visual-caption"><span class="live-dot"></span> EDGE AI &amp; IOT TELEMETRY READY</div>
+			<div class="visual-title"><span>Precision in</span><strong>every process.</strong></div>
+			<div class="visual-readout"><div><small>EDGE NODES</small><strong>ESP32<span> / MQTT</span></strong></div><div><small>AI INFERENCE</small><strong>Edge Impulse</strong></div><div><small>CLOUD / BROKER</small><strong>ThingsBoard</strong></div></div>
+			<div class="visual-decoration" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
+		</aside>
+	</main>
+
+	<div id="application" class="app-shell is-hidden">
+		<aside id="sidebar" class="sidebar">
+			<a class="sidebar-brand" href="#dashboard" aria-label="Factory Alert dashboard"><span class="brand-mark small">F<span>A</span></span><span>FACTORY ALERT<small>EDGE AI &amp; IOT</small></span></a>
+			<div class="nav-caption">WORKSPACE</div>
+			<nav class="side-nav" aria-label="Main navigation">
+				<button class="nav-item active" data-route="dashboard"><svg><use href="#i-grid"/></svg><span>Dashboard</span></button>
+				<button class="nav-item" data-route="machines"><svg><use href="#i-cpu"/></svg><span>Devices &amp; Lines</span><span id="sidebar-machine-count" class="nav-count">0</span></button>
+				<button class="nav-item" data-route="sensors"><svg><use href="#i-radio"/></svg><span>Sensors &amp; Edge AI</span></button>
+				<button class="nav-item" data-route="alerts"><svg><use href="#i-bell"/></svg><span>Alerts</span><span id="sidebar-alert-count" class="nav-count alert-count">0</span></button>
+				<button class="nav-item" data-route="reports"><svg><use href="#i-chart"/></svg><span>Reports</span></button>
+				<button class="nav-item" data-route="integrations"><svg><use href="#i-link"/></svg><span>ESP32 &amp; IoT Hub</span><span id="sidebar-mode-badge" class="nav-badge">TB</span></button>
+				<button class="nav-item admin-only" data-route="users"><svg><use href="#i-users"/></svg><span>Users</span></button>
+				<button class="nav-item admin-only" data-route="settings"><svg><use href="#i-settings"/></svg><span>Settings</span></button>
+			</nav>
+			<div class="side-dropdowns">
+				<div class="nav-caption">QUICK ACCESS</div>
+				<div class="dropdown-wrap"><button class="side-dropdown-toggle" data-dropdown="monitoring-mobile">Monitoring <svg><use href="#i-chevron"/></svg></button><div class="dropdown-menu side-dropdown-menu" data-menu="monitoring-mobile"><button data-route="machines">Connected Devices</button><button data-route="sensors">Sensor &amp; AI Status</button><button data-route="dashboard">System Overview</button></div></div>
+				<div class="dropdown-wrap"><button class="side-dropdown-toggle" data-dropdown="iot-mobile">Hardware &amp; AI <svg><use href="#i-chevron"/></svg></button><div class="dropdown-menu side-dropdown-menu" data-menu="iot-mobile"><button data-route="integrations">ThingsBoard Connection</button><button data-route="integrations">Register Real Devices</button><button data-route="integrations">ESP32 Firmware (.ino)</button></div></div>
+			</div>
+			<div class="sidebar-spacer"></div>
+			<div class="sidebar-connection" id="sidebar-connection-box"><span class="connection-dot offline" id="sidebar-conn-dot"></span><span><span id="sidebar-conn-title">ThingsBoard IoT</span><small id="sidebar-conn-sub">No Devices Linked</small></span><b id="sidebar-conn-badge">WAIT</b></div>
+			<button id="logout-button" class="logout-button"><span>↗</span> Sign out</button>
+			<div class="sidebar-version">FACTORY ALERT · v3.1 LIVE IOT</div>
+		</aside>
+
+		<div class="main-column">
+			<header class="topbar">
+				<button id="mobile-menu" class="icon-button mobile-menu" aria-label="Open navigation"><svg><use href="#i-menu"/></svg></button>
+				<div class="breadcrumb"><span>Plant 01</span><b>/</b><strong id="breadcrumb-page">Dashboard</strong></div>
+				<div class="topbar-actions">
+					<button class="top-live mode-pill-btn" id="topbar-mode-pill" data-route="integrations" title="Configure ESP32, ThingsBoard, and Edge Impulse">
+						<span class="live-dot offline" id="topbar-live-dot"></span>
+						<span id="topbar-mode-text">THINGSBOARD</span>
+						<span class="top-divider"></span>
+						<span class="connection-label" id="topbar-conn-label">No Devices</span>
+					</button>
+					<div class="dropdown-wrap"><button class="top-menu-button" data-dropdown="monitoring">Monitoring <svg><use href="#i-chevron"/></svg></button><div class="dropdown-menu" data-menu="monitoring"><button data-route="machines">Connected Devices</button><button data-route="sensors">Sensors &amp; Edge AI</button><button data-route="dashboard">System Overview</button></div></div>
+					<div class="dropdown-wrap"><button class="top-menu-button" data-dropdown="iot">ESP32 / IoT <svg><use href="#i-chevron"/></svg></button><div class="dropdown-menu" data-menu="iot"><button data-route="integrations">ThingsBoard API Setup</button><button data-route="integrations">Add Real ESP32 Device</button><button data-route="integrations">Download ESP32 Code (.ino)</button></div></div>
+					<div class="dropdown-wrap"><button class="top-menu-button" data-dropdown="settings">Settings <svg><use href="#i-chevron"/></svg></button><div class="dropdown-menu dropdown-right" data-menu="settings"><button data-route="settings">Sensor &amp; AI Thresholds</button><button data-route="users">User Management</button><button data-route="settings">Appearance</button></div></div>
+					<div class="dropdown-wrap notification-wrap"><button id="notification-button" class="icon-button notification-button" aria-label="Notifications"><svg><use href="#i-bell"/></svg><span id="notification-count" class="notification-count">0</span></button><div id="notification-panel" class="notification-panel is-hidden"><div class="notification-heading"><strong>Notifications</strong><button id="mark-read" class="text-button">Mark all read</button></div><div id="notification-list"></div></div></div>
+					<div class="user-chip"><span class="avatar" id="top-user-avatar">AD</span><span id="top-user-name">Admin User<small>Administrator</small></span><svg class="user-chevron"><use href="#i-chevron"/></svg></div>
+				</div>
+			</header>
+			<main id="page-content" class="page-content" tabindex="-1"></main>
+			<footer class="app-footer"><span>FACTORY ALERT · ESP32 + EDGE IMPULSE + THINGSBOARD</span><span id="footer-mode-label">MODE: THINGSBOARD LIVE</span></footer>
+		</div>
+	</div>
+
+	<div id="toast-region" class="toast-region" aria-live="polite"></div>
+	<script src="app.js" defer></script>
+</body>
+</html>
