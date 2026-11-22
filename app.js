@@ -380,6 +380,67 @@
 		footerLabel.textContent = `MODE: THINGSBOARD LIVE (${state.iotConfig.tbHost})`;
 	}
 
+	// ส่งค่าเกณฑ์แจ้งเตือน (Thresholds) จากหน้าเว็บไปเก็บใน ThingsBoard Shared Attributes เพื่อส่งต่อให้ ESP32-S3
+	async function pushThresholdsToThingsBoard(silent = false) {
+		const cfg = state.iotConfig;
+		if (!cfg.tbHost || !cfg.tbJwtToken || state.machines.length === 0) {
+			if (!silent) {
+				showToast('Saved locally. Link a ThingsBoard device & JWT token in IoT Hub to sync with ESP32.', 'warning');
+			}
+			return false;
+		}
+
+		const host = cfg.tbHost.replace(/\/+$/, '');
+		const payload = {
+			pm25Warning: Number(state.thresholds.pm25Warning),
+			pm25Danger: Number(state.thresholds.pm25Danger),
+			pm10Warning: Number(state.thresholds.pm10Warning),
+			pm10Danger: Number(state.thresholds.pm10Danger),
+			tempWarning: Number(state.thresholds.tempWarning),
+			tempDanger: Number(state.thresholds.tempDanger),
+			humidityLow: Number(state.thresholds.humidityLow),
+			humidityHigh: Number(state.thresholds.humidityHigh),
+			humidityDangerLow: Number(state.thresholds.humidityDangerLow),
+			humidityDangerHigh: Number(state.thresholds.humidityDangerHigh),
+			anomalyWarning: Number(state.thresholds.anomalyWarning),
+			anomalyDanger: Number(state.thresholds.anomalyDanger)
+		};
+
+		let successCount = 0;
+		let lastError = '';
+
+		for (const dev of state.machines) {
+			if (!dev.tbDeviceId) continue;
+			const url = `${host}/api/plugins/telemetry/DEVICE/${encodeURIComponent(dev.tbDeviceId.trim())}/attributes/SHARED_SCOPE`;
+			try {
+				const res = await fetch(url, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'X-Authorization': `Bearer ${cfg.tbJwtToken.trim()}`
+					},
+					body: JSON.stringify(payload)
+				});
+				if (!res.ok) {
+					throw new Error(`HTTP ${res.status}`);
+				}
+				successCount++;
+			} catch (err) {
+				lastError = err.message;
+			}
+		}
+
+		if (successCount > 0) {
+			if (!silent) {
+				showToast(`Thresholds synced to ThingsBoard (${successCount} device) → ESP32 LEDs updated.`);
+			}
+			return true;
+		} else if (lastError && !silent) {
+			showToast(`Saved locally, but ThingsBoard sync failed (${lastError}). Check JWT Token.`, 'warning');
+		}
+		return false;
+	}
+
 	async function fetchThingsBoardTelemetry() {
 		const cfg = state.iotConfig;
 		if (state.machines.length === 0) {
@@ -795,7 +856,7 @@
 			<section class="sensor-grid">${Object.keys(sensorMeta).map(sensorCard).join('')}${edgeAiCard()}</section>
 			<div class="chart-alert-grid">
 				<section class="panel chart-panel"><div class="panel-header"><div><h2>Edge AI Anomaly History</h2><p>Real-time anomaly score (%) vs temperature</p></div></div><div class="chart-legend"><span><i class="legend-mark"></i>Anomaly Score (%)</span><span><i class="legend-mark temp"></i>Normalized Temp</span></div>${makeRealChart('ai')}</section>
-				<section class="panel"><div class="panel-header"><div><h2>Active Thresholds</h2><p>Configured trigger limits</p></div><button class="text-button" data-route="settings">Edit →</button></div><div class="safety-list"><div class="safety-row"><span>PM2.5 warning / danger</span><strong>${state.thresholds.pm25Warning} / ${state.thresholds.pm25Danger} µg/m³</strong></div><div class="safety-row"><span>PM10 warning / danger</span><strong>${state.thresholds.pm10Warning} / ${state.thresholds.pm10Danger} µg/m³</strong></div><div class="safety-row"><span>Temperature alert</span><strong>&gt; ${state.thresholds.tempWarning}°C (Danger ≥ ${state.thresholds.tempDanger}°C)</strong></div><div class="safety-row"><span>Humidity target</span><strong>${state.thresholds.humidityLow}–${state.thresholds.humidityHigh}%</strong></div><div class="safety-row"><span>Edge AI Anomaly score</span><strong>Warn ≥ ${state.thresholds.anomalyWarning} · Danger ≥ ${state.thresholds.anomalyDanger}</strong></div></div></section>
+				<section class="panel"><div class="panel-header"><div><h2>Active Thresholds</h2><p>Configured trigger limits</p></div><button class="text-button" data-route="settings">Edit →</button></div><div class="safety-list"><div class="safety-row"><span>PM2.5 warning / danger</span><strong>${state.thresholds.pm25Warning} / ${state.thresholds.pm25Danger} µg/m³</strong></div><div class="safety-row"><span>PM10 warning / danger</span><strong>${state.thresholds.pm10Warning} / ${state.thresholds.pm10Danger} µg/m³</strong></div><div class="safety-row"><span>Temperature alert</span><strong>&gt; ${state.thresholds.tempWarning}°C (Danger ≥ ${state.thresholds.tempDanger}°C)</strong></div><div class="safety-row"><span>Humidity target</span><strong>${state.thresholds.humidityLow}–${state.thresholds.humidityHigh}% (Danger &lt;${state.thresholds.humidityDangerLow}% / &gt;${state.thresholds.humidityDangerHigh}%)</strong></div><div class="safety-row"><span>Edge AI Anomaly score</span><strong>Warn ≥ ${state.thresholds.anomalyWarning} · Danger ≥ ${state.thresholds.anomalyDanger}</strong></div></div></section>
 			</div>`;
 	}
 
@@ -904,7 +965,7 @@ void loop() {
 			<div class="settings-grid">
 				<div>
 					<section class="panel settings-section">
-						<div class="panel-header"><div><h2>1. ThingsBoard API Connection</h2><p>Required to fetch live telemetry from your real ThingsBoard account</p></div>${statusPill(state.tbConnection.status.toUpperCase(), state.tbConnection.status === 'connected' ? 'normal' : state.tbConnection.status === 'error' ? 'danger' : 'offline')}</div>
+						<div class="panel-header"><div><h2>1. ThingsBoard API Connection</h2><p>Required to fetch live telemetry and push LED thresholds to ThingsBoard</p></div>${statusPill(state.tbConnection.status.toUpperCase(), state.tbConnection.status === 'connected' ? 'normal' : state.tbConnection.status === 'error' ? 'danger' : 'offline')}</div>
 						<div class="settings-body">
 							<div class="field"><label for="iot-tb-host">ThingsBoard Host URL</label><input id="iot-tb-host" value="${esc(cfg.tbHost)}" placeholder="https://thingsboard.cloud"></div>
 							<div class="field"><label for="iot-tb-poll">REST Poll Interval (ms)</label><input id="iot-tb-poll" type="number" min="1000" step="500" value="${cfg.tbPollIntervalMs}"></div>
@@ -1008,23 +1069,25 @@ void loop() {
 
 	function settingsPage() {
 		if (state.role !== 'Admin') return `<div class="page-heading"><div><p class="eyebrow">SYSTEM CONFIGURATION</p><h1>Settings</h1></div></div><section class="panel"><div class="empty-state">Administrator permission is required to change system settings.</div></section>`;
-		return `<div class="page-heading"><div><p class="eyebrow">SYSTEM CONFIGURATION</p><h1>Settings</h1><p>Manage sensor &amp; Edge AI alert thresholds and display preferences.</p></div><div class="heading-actions"><button class="button button-secondary" data-route="integrations">${icon('link')} ESP32 &amp; ThingsBoard Setup</button><button class="button button-primary" data-action="save-settings">Save all changes</button></div></div>
+		return `<div class="page-heading"><div><p class="eyebrow">SYSTEM CONFIGURATION</p><h1>Settings</h1><p>Manage sensor &amp; Edge AI alert thresholds (auto-syncs to ThingsBoard &amp; ESP32 LEDs).</p></div><div class="heading-actions"><button class="button button-secondary" data-route="integrations">${icon('link')} ESP32 &amp; ThingsBoard Setup</button><button class="button button-primary" data-action="save-settings">Save all changes</button></div></div>
 			<div class="settings-grid"><div>
 			<section class="panel settings-section">
-				<div class="panel-header"><div><h2>Sensor &amp; Edge AI thresholds</h2><p>Applies immediately to incoming live telemetry</p></div>
+				<div class="panel-header"><div><h2>Sensor &amp; Edge AI thresholds</h2><p>Syncs directly to ThingsBoard Shared Attributes &amp; ESP32-S3</p></div>
 				<div style="display:flex;gap:5px"><button type="button" class="filter-chip" data-preset-thresh="standard">Standard</button><button type="button" class="filter-chip" data-preset-thresh="strict">Cleanroom</button></div></div>
 				<form id="threshold-form" class="settings-body">
-					<div class="field"><label for="pm25-warning">PM2.5 warning (µg/m³)</label><input id="pm25-warning" type="number" min="0" value="${state.thresholds.pm25Warning}" required></div>
-					<div class="field"><label for="pm25-danger">PM2.5 danger (µg/m³)</label><input id="pm25-danger" type="number" min="1" value="${state.thresholds.pm25Danger}" required></div>
-					<div class="field"><label for="pm10-warning">PM10 warning (µg/m³)</label><input id="pm10-warning" type="number" min="0" value="${state.thresholds.pm10Warning}" required></div>
-					<div class="field"><label for="pm10-danger">PM10 danger (µg/m³)</label><input id="pm10-danger" type="number" min="1" value="${state.thresholds.pm10Danger}" required></div>
-					<div class="field"><label for="temp-warning">Temperature warning (°C)</label><input id="temp-warning" type="number" min="1" value="${state.thresholds.tempWarning}" required></div>
-					<div class="field"><label for="temp-danger">Temperature danger (°C)</label><input id="temp-danger" type="number" min="2" value="${state.thresholds.tempDanger}" required></div>
-					<div class="field"><label for="humidity-low">Humidity lower target (%)</label><input id="humidity-low" type="number" min="0" max="100" value="${state.thresholds.humidityLow}" required></div>
-					<div class="field"><label for="humidity-high">Humidity upper target (%)</label><input id="humidity-high" type="number" min="0" max="100" value="${state.thresholds.humidityHigh}" required></div>
+					<div class="field"><label for="pm25-warning">PM2.5 warning (µg/m³)</label><input id="pm25-warning" type="number" step="0.1" min="0" value="${state.thresholds.pm25Warning}" required></div>
+					<div class="field"><label for="pm25-danger">PM2.5 danger (µg/m³)</label><input id="pm25-danger" type="number" step="0.1" min="1" value="${state.thresholds.pm25Danger}" required></div>
+					<div class="field"><label for="pm10-warning">PM10 warning (µg/m³)</label><input id="pm10-warning" type="number" step="0.1" min="0" value="${state.thresholds.pm10Warning}" required></div>
+					<div class="field"><label for="pm10-danger">PM10 danger (µg/m³)</label><input id="pm10-danger" type="number" step="0.1" min="1" value="${state.thresholds.pm10Danger}" required></div>
+					<div class="field"><label for="temp-warning">Temperature warning (°C)</label><input id="temp-warning" type="number" step="0.1" min="1" value="${state.thresholds.tempWarning}" required></div>
+					<div class="field"><label for="temp-danger">Temperature danger (°C)</label><input id="temp-danger" type="number" step="0.1" min="2" value="${state.thresholds.tempDanger}" required></div>
+					<div class="field"><label for="humidity-low">Humidity warning low (%)</label><input id="humidity-low" type="number" step="0.1" min="0" max="100" value="${state.thresholds.humidityLow}" required></div>
+					<div class="field"><label for="humidity-high">Humidity warning high (%)</label><input id="humidity-high" type="number" step="0.1" min="0" max="100" value="${state.thresholds.humidityHigh}" required></div>
+					<div class="field"><label for="humidity-danger-low">Humidity danger low (%)</label><input id="humidity-danger-low" type="number" step="0.1" min="0" max="100" value="${state.thresholds.humidityDangerLow}" required></div>
+					<div class="field"><label for="humidity-danger-high">Humidity danger high (%)</label><input id="humidity-danger-high" type="number" step="0.1" min="0" max="100" value="${state.thresholds.humidityDangerHigh}" required></div>
 					<div class="field"><label for="anomaly-warning">Edge AI Anomaly warning (0–1)</label><input id="anomaly-warning" type="number" step="0.05" min="0.05" max="0.95" value="${state.thresholds.anomalyWarning}" required></div>
 					<div class="field"><label for="anomaly-danger">Edge AI Anomaly danger (0–1)</label><input id="anomaly-danger" type="number" step="0.05" min="0.1" max="1" value="${state.thresholds.anomalyDanger}" required></div>
-					<div class="field full"><button type="submit" class="button button-primary">Apply threshold changes</button></div>
+					<div class="field full"><button type="submit" class="button button-primary">Apply &amp; Sync Thresholds to ESP32</button></div>
 				</form>
 			</section>
 			</div>
@@ -1128,17 +1191,27 @@ void loop() {
 			tempDanger: 'temp-danger',
 			humidityLow: 'humidity-low',
 			humidityHigh: 'humidity-high',
+			humidityDangerLow: 'humidity-danger-low',
+			humidityDangerHigh: 'humidity-danger-high',
 			anomalyWarning: 'anomaly-warning',
 			anomalyDanger: 'anomaly-danger'
 		};
 		const next = Object.fromEntries(Object.entries(fields).map(([key, id]) => [key, Number($(`#${id}`).value)]));
-		if (next.pm25Warning >= next.pm25Danger || next.pm10Warning >= next.pm10Danger || next.tempWarning >= next.tempDanger || next.humidityLow >= next.humidityHigh || next.anomalyWarning >= next.anomalyDanger) {
-			showToast('Warning thresholds must be lower than danger thresholds.', 'danger');
+		if (
+			next.pm25Warning >= next.pm25Danger ||
+			next.pm10Warning >= next.pm10Danger ||
+			next.tempWarning >= next.tempDanger ||
+			next.humidityDangerLow >= next.humidityLow ||
+			next.humidityLow >= next.humidityHigh ||
+			next.humidityHigh >= next.humidityDangerHigh ||
+			next.anomalyWarning >= next.anomalyDanger
+		) {
+			showToast('Warning thresholds must be inside Danger thresholds.', 'danger');
 			return false;
 		}
 		Object.assign(state.thresholds, next);
 		localStorage.setItem(STORAGE_KEYS.thresholds, JSON.stringify(state.thresholds));
-		showToast('Sensor & Edge AI thresholds saved.');
+		pushThresholdsToThingsBoard(false);
 		evaluateSensors();
 		if (shouldRender) renderPage();
 		return true;
@@ -1158,7 +1231,8 @@ void loop() {
 		updateConnectionIndicators();
 		fetchThingsBoardTelemetry();
 		connectThingsBoardWebSocket();
-		showToast('ThingsBoard configuration saved.');
+		pushThresholdsToThingsBoard(true);
+		showToast('ThingsBoard configuration saved & thresholds synced.');
 		renderPage();
 	}
 
@@ -1331,11 +1405,12 @@ void loop() {
 		if (presetThresh) {
 			const kind = presetThresh.dataset.presetThresh;
 			const p = kind === 'strict'
-				? { pm25Warning: 15, pm25Danger: 35, pm10Warning: 25, pm10Danger: 50, tempWarning: 25, tempDanger: 28, humidityLow: 45, humidityHigh: 60, anomalyWarning: 0.45, anomalyDanger: 0.70 }
+				? { pm25Warning: 15, pm25Danger: 35, pm10Warning: 25, pm10Danger: 50, tempWarning: 25, tempDanger: 28, humidityLow: 45, humidityHigh: 60, humidityDangerLow: 35, humidityDangerHigh: 70, anomalyWarning: 0.45, anomalyDanger: 0.70 }
 				: defaultThresholds;
 			Object.assign(state.thresholds, p);
 			localStorage.setItem(STORAGE_KEYS.thresholds, JSON.stringify(state.thresholds));
-			showToast(`Applied ${kind} thresholds.`);
+			pushThresholdsToThingsBoard(false);
+			evaluateSensors();
 			renderPage();
 			return;
 		}
@@ -1356,7 +1431,7 @@ void loop() {
 			if (name === 'export-machines') exportMachines();
 			if (name === 'export-report') exportCsv('factory-alert-report.csv', [['Metric', 'Current value', 'Status'], ['PM2.5', isNum(state.sensors.pm25) ? state.sensors.pm25 : '--', severityLabel(severityFor('pm25', state.sensors.pm25))], ['PM10', isNum(state.sensors.pm10) ? state.sensors.pm10 : '--', severityLabel(severityFor('pm10', state.sensors.pm10))], ['Temperature °C', isNum(state.sensors.temperature) ? state.sensors.temperature.toFixed(1) : '--', severityLabel(severityFor('temperature', state.sensors.temperature))], ['Humidity %', isNum(state.sensors.humidity) ? state.sensors.humidity : '--', severityLabel(severityFor('humidity', state.sensors.humidity))], ['Edge AI Anomaly Score', isNum(state.edgeAi.anomalyScore) ? state.edgeAi.anomalyScore : '--', severityLabel(isNum(state.edgeAi.anomalyScore) ? state.edgeAi.status : 'offline')]]);
 			if (name === 'pdf-report') window.print();
-			if (name === 'save-settings') { const form = $('#threshold-form'); if (saveThresholds(form, false)) { renderPage(); showToast('All settings saved.'); } }
+			if (name === 'save-settings') { const form = $('#threshold-form'); if (saveThresholds(form, false)) { renderPage(); } }
 			if (name === 'save-iot-config') saveIotConfiguration();
 			if (name === 'add-device') {
 				const nameVal = $('#new-dev-name').value.trim();
@@ -1384,6 +1459,7 @@ void loop() {
 				updateConnectionIndicators();
 				fetchThingsBoardTelemetry();
 				connectThingsBoardWebSocket();
+				pushThresholdsToThingsBoard(true);
 				renderPage();
 				showToast(`Registered real device: ${nameVal}`);
 			}
