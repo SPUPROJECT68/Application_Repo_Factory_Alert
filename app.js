@@ -33,7 +33,7 @@
 		tbPublicDashboardUrl: '',
 		tbPollIntervalMs: 5000,
 		tbUseWebSocket: false,
-		eiProjectName: 'Factory-Anomaly-v2',
+		eiProjectName: 'Uefa_ProjectSPU',
 		eiAutoAlert: true
 	};
 
@@ -92,6 +92,8 @@
 		reportRange: 'today',
 		reportStartDate: new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10),
 		reportEndDate: new Date().toISOString().slice(0, 10),
+		reportLogs: [],
+		reportLoading: false,
 		sensorUpdatedAt: null,
 		machines: readStorage(STORAGE_KEYS.devices, [])
 	};
@@ -118,6 +120,18 @@
 		return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(timestamp);
 	}
 
+	function formatDateTime(timestamp) {
+		if (!timestamp) return '--';
+		return new Intl.DateTimeFormat('en-GB', {
+			year: 'numeric',
+			month: '2-digit',
+			day: '2-digit',
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit'
+		}).format(timestamp);
+	}
+
 	function relativeTime(timestamp) {
 		if (!timestamp) return 'No data yet';
 		const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
@@ -125,7 +139,7 @@
 	}
 
 	function isNum(v) {
-		return typeof v === 'number' && !Number.isNaN(v);
+		return typeof v === 'number' && !Number.isNaN(v) && Number.isFinite(v);
 	}
 
 	function severityFor(key, value) {
@@ -271,7 +285,7 @@
 		device.status = state.edgeAi.status === 'danger' ? 'ERROR' : state.edgeAi.status === 'warning' ? 'WARNING' : 'ONLINE';
 		localStorage.setItem(STORAGE_KEYS.devices, JSON.stringify(state.machines));
 
-		const ts = Date.now();
+		const ts = latestTs || Date.now();
 		if (isNum(state.sensors.pm25)) state.sensorHistory.pm25.push({ value: state.sensors.pm25, timestamp: ts });
 		if (isNum(state.sensors.pm10)) state.sensorHistory.pm10.push({ value: state.sensors.pm10, timestamp: ts });
 		if (isNum(state.sensors.temperature)) state.sensorHistory.temperature.push({ value: state.sensors.temperature, timestamp: ts });
@@ -279,7 +293,7 @@
 		if (isNum(state.edgeAi.anomalyScore)) state.sensorHistory.anomalyScore.push({ value: state.edgeAi.anomalyScore, timestamp: ts });
 
 		Object.values(state.sensorHistory).forEach(arr => {
-			if (arr.length > 100) arr.shift();
+			if (arr.length > 500) arr.shift();
 		});
 
 		evaluateSensors();
@@ -380,7 +394,6 @@
 		footerLabel.textContent = `MODE: THINGSBOARD LIVE (${state.iotConfig.tbHost})`;
 	}
 
-	// ส่งค่าเกณฑ์แจ้งเตือน (Thresholds) จากหน้าเว็บไปเก็บใน ThingsBoard Shared Attributes เพื่อส่งต่อให้ ESP32-S3
 	async function pushThresholdsToThingsBoard(silent = false) {
 		const cfg = state.iotConfig;
 		if (!cfg.tbHost || !cfg.tbJwtToken || state.machines.length === 0) {
@@ -411,19 +424,33 @@
 
 		for (const dev of state.machines) {
 			if (!dev.tbDeviceId) continue;
-			const url = `${host}/api/plugins/telemetry/DEVICE/${encodeURIComponent(dev.tbDeviceId.trim())}/attributes/SHARED_SCOPE`;
+			const devUuid = encodeURIComponent(dev.tbDeviceId.trim());
+			const attrUrl = `${host}/api/plugins/telemetry/DEVICE/${devUuid}/attributes/SHARED_SCOPE`;
+			const rpcUrl = `${host}/api/plugins/rpc/oneway/${devUuid}`;
+			const headers = {
+				'Content-Type': 'application/json',
+				'X-Authorization': `Bearer ${cfg.tbJwtToken.trim()}`
+			};
+
 			try {
-				const res = await fetch(url, {
+				const res = await fetch(attrUrl, {
 					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-Authorization': `Bearer ${cfg.tbJwtToken.trim()}`
-					},
+					headers,
 					body: JSON.stringify(payload)
 				});
 				if (!res.ok) {
 					throw new Error(`HTTP ${res.status}`);
 				}
+
+				fetch(rpcUrl, {
+					method: 'POST',
+					headers,
+					body: JSON.stringify({
+						method: 'syncThresholds',
+						params: payload
+					})
+				}).catch(() => {});
+
 				successCount++;
 			} catch (err) {
 				lastError = err.message;
@@ -432,7 +459,7 @@
 
 		if (successCount > 0) {
 			if (!silent) {
-				showToast(`Thresholds synced to ThingsBoard (${successCount} device) → ESP32 LEDs updated.`);
+				showToast(`Thresholds pushed to ESP32 (${successCount} device) — LEDs & Buzzer updated immediately.`);
 			}
 			return true;
 		} else if (lastError && !silent) {
@@ -503,6 +530,96 @@
 			state.tbConnection.errorMsg = lastError;
 		}
 		updateConnectionIndicators();
+	}
+
+	// ดึงประวัติล็อกย้อนหลังทั้งหมดจาก ThingsBoard Cloud ตามช่วงวันที่ในหน้า Reports
+	async function fetchThingsBoardHistory(notify = false) {
+		const cfg = state.iotConfig;
+		if (!cfg.tbHost || !cfg.tbJwtToken || state.machines.length === 0) {
+			state.reportLogs = [];
+			if (notify) showToast('Configure ThingsBoard JWT Token and Device ID in IoT Hub first.', 'warning');
+			if (state.route === 'reports') renderPage();
+			return;
+		}
+
+		const now = Date.now();
+		let startTs = now - 86400000;
+		let endTs = now;
+
+		if (state.reportRange === 'today') {
+			const d = new Date();
+			d.setHours(0, 0, 0, 0);
+			startTs = d.getTime();
+		} else if (state.reportRange === '7d') {
+			startTs = now - 7 * 86400000;
+		} else if (state.reportRange === '30d') {
+			startTs = now - 30 * 86400000;
+		} else if (state.reportRange === 'custom') {
+			const s = new Date(`${state.reportStartDate}T00:00:00`).getTime();
+			const e = new Date(`${state.reportEndDate}T23:59:59.999`).getTime();
+			if (!Number.isNaN(s)) startTs = s;
+			if (!Number.isNaN(e)) endTs = e;
+		}
+
+		state.reportLoading = true;
+		if (state.route === 'reports') renderPage();
+
+		const host = cfg.tbHost.replace(/\/+$/, '');
+		const keys = 'pm25,pm10,temperature,humidity,ai_status,anomaly_score';
+		const mergedMap = new Map();
+
+		for (const dev of state.machines) {
+			if (!dev.tbDeviceId) continue;
+			const url = `${host}/api/plugins/telemetry/DEVICE/${encodeURIComponent(dev.tbDeviceId.trim())}/values/timeseries?keys=${keys}&startTs=${startTs}&endTs=${endTs}&limit=5000&agg=NONE`;
+			try {
+				const res = await fetch(url, {
+					headers: {
+						'Content-Type': 'application/json',
+						'X-Authorization': `Bearer ${cfg.tbJwtToken.trim()}`
+					}
+				});
+				if (!res.ok) continue;
+				const raw = await res.json();
+
+				Object.entries(raw).forEach(([key, arr]) => {
+					if (!Array.isArray(arr)) return;
+					arr.forEach(pt => {
+						const bucketTs = Math.round(Number(pt.ts) / 1000) * 1000;
+						if (!mergedMap.has(bucketTs)) {
+							mergedMap.set(bucketTs, {
+								ts: Number(pt.ts),
+								device: dev.name,
+								pm25: null,
+								pm10: null,
+								temperature: null,
+								humidity: null,
+								ai_status: '',
+								anomaly_score: null
+							});
+						}
+						const row = mergedMap.get(bucketTs);
+						if (key === 'ai_status') {
+							row.ai_status = String(pt.value ?? '');
+						} else {
+							const num = Number(pt.value);
+							if (isNum(num)) row[key] = num;
+						}
+					});
+				});
+			} catch {}
+		}
+
+		const rows = [...mergedMap.values()]
+			.filter(r => isNum(r.pm25) && isNum(r.pm10) && isNum(r.temperature) && isNum(r.humidity))
+			.sort((a, b) => a.ts - b.ts);
+
+		state.reportLogs = rows;
+		state.reportLoading = false;
+
+		if (notify) {
+			showToast(rows.length ? `Loaded ${rows.length} historical log records.` : 'No historical records found in this date range.', rows.length ? 'normal' : 'warning');
+		}
+		if (state.route === 'reports') renderPage();
 	}
 
 	function connectThingsBoardWebSocket() {
@@ -867,19 +984,99 @@
 			<section class="panel"><div class="filter-bar"><div class="severity-filter">${['all', 'danger', 'warning', 'info'].map(value => `<button class="filter-chip ${state.alertFilter === value ? 'active' : ''}" data-filter="${value}">${value === 'all' ? 'All' : value === 'danger' ? 'Critical' : value[0].toUpperCase() + value.slice(1)}</button>`).join('')}</div><span class="filter-spacer"></span><select class="select-control" data-filter-select="machine"><option value="all">All sources</option>${[...new Set(state.alerts.map(alert => alert.source))].map(source => `<option ${state.machineFilter === source ? 'selected' : ''} value="${esc(source)}">${esc(source)}</option>`).join('')}</select><select class="select-control" data-filter-select="sensor"><option value="all">All event types</option>${[...new Set(state.alerts.map(alert => alert.type))].map(type => `<option ${state.sensorFilter === type ? 'selected' : ''} value="${esc(type)}">${esc(type)}</option>`).join('')}</select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Severity</th><th>Event</th><th>Source / area</th><th>Time</th><th>Status</th><th>Action</th></tr></thead><tbody>${filtered.length ? filtered.map(alert => `<tr><td data-label="Severity">${statusPill(alert.severity.toUpperCase(), alert.severity === 'info' ? 'normal' : alert.severity)}</td><td data-label="Event"><strong>${esc(alert.message)}</strong></td><td data-label="Source / area">${esc(alert.source)} · ${esc(alert.type)}</td><td data-label="Time">${formatTime(alert.timestamp)}<br><small>${relativeTime(alert.timestamp)}</small></td><td data-label="Status">${alert.acknowledged ? statusPill('ACKNOWLEDGED', 'offline') : statusPill('OPEN', alert.severity === 'info' ? 'normal' : alert.severity)}</td><td data-label="Action">${alert.acknowledged ? '—' : `<button class="text-button" data-ack="${esc(alert.id)}">Acknowledge</button>`}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty-state">No alerts recorded yet.</div></td></tr>'}</tbody></table></div></section>`;
 	}
 
+	function getExportableLogs() {
+		if (state.reportLogs.length > 0) return state.reportLogs;
+		const len = Math.min(
+			state.sensorHistory.pm25.length,
+			state.sensorHistory.pm10.length,
+			state.sensorHistory.temperature.length,
+			state.sensorHistory.humidity.length
+		);
+		const fallback = [];
+		for (let i = 0; i < len; i++) {
+			fallback.push({
+				ts: state.sensorHistory.pm25[i].timestamp,
+				device: state.edgeAi.nodeId || 'ESP32-NODE-01',
+				pm25: state.sensorHistory.pm25[i].value,
+				pm10: state.sensorHistory.pm10[i].value,
+				temperature: state.sensorHistory.temperature[i].value,
+				humidity: state.sensorHistory.humidity[i].value,
+				ai_status: state.edgeAi.status || 'normal',
+				anomaly_score: state.sensorHistory.anomalyScore[i]?.value ?? null
+			});
+		}
+		return fallback;
+	}
+
 	function reportsPage() {
 		const labels = { today: 'Today', '7d': 'Last 7 days', '30d': 'Last 30 days', custom: 'Custom range' };
 		const rangeLabel = state.reportRange === 'custom' ? `${state.reportStartDate} – ${state.reportEndDate}` : labels[state.reportRange];
-		const activeCount = state.machines.filter(m => m.connected).length;
-		return `<div class="page-heading"><div><p class="eyebrow">PRODUCTION INTELLIGENCE</p><h1>Reports</h1><p>Live telemetry and Edge AI event summaries for Plant 01.</p></div><div class="heading-actions"><select class="select-control" data-action="report-range">${Object.entries(labels).map(([value, label]) => `<option value="${value}" ${state.reportRange === value ? 'selected' : ''}>${label}</option>`).join('')}</select><button class="button button-secondary" data-action="export-report">${icon('download')} Export CSV</button><button class="button button-primary" data-action="pdf-report">Print / Save PDF</button></div></div>
+		const logs = getExportableLogs();
+
+		const avg = arr => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+		const pm25Avg = avg(logs.map(r => r.pm25));
+		const tempAvg = avg(logs.map(r => r.temperature));
+		const humAvg = avg(logs.map(r => r.humidity));
+
+		return `<div class="page-heading">
+				<div><p class="eyebrow">PRODUCTION INTELLIGENCE &amp; DATASET EXPORT</p><h1>Reports &amp; Historical Logs</h1><p>Fetch historical sensor logs from ThingsBoard and export directly for Excel or Edge Impulse.</p></div>
+				<div class="heading-actions">
+					<select class="select-control" data-action="report-range">${Object.entries(labels).map(([value, label]) => `<option value="${value}" ${state.reportRange === value ? 'selected' : ''}>${label}</option>`).join('')}</select>
+					<button class="button button-secondary" data-action="refresh-history">↻ Fetch Logs</button>
+					<button class="button button-primary" data-action="export-ei-csv">${icon('download')} Export Edge Impulse CSV</button>
+					<button class="button button-secondary" data-action="export-report">${icon('download')} Export Full CSV</button>
+					<button class="button button-secondary" data-action="pdf-report">Print / PDF</button>
+				</div>
+			</div>
 			<section class="detail-grid">
-				<div class="detail-stat"><small>Active Devices</small><strong>${activeCount} <span>/ ${state.machines.length}</span></strong><span>receiving ThingsBoard data</span></div>
-				<div class="detail-stat"><small>Current Temp</small><strong>${isNum(state.sensors.temperature) ? `${state.sensors.temperature.toFixed(1)} <span>°C</span>` : '--'}</strong><span>live sensor reading</span></div>
-				<div class="detail-stat"><small>Edge AI Anomaly</small><strong>${isNum(state.edgeAi.anomalyScore) ? state.edgeAi.anomalyScore.toFixed(2) : '--'}</strong><span>${esc(state.edgeAi.label)}</span></div>
+				<div class="detail-stat"><small>Historical Records</small><strong>${state.reportLoading ? '...' : logs.length}</strong><span>${state.reportLogs.length > 0 ? 'fetched from ThingsBoard' : 'session buffer'}</span></div>
+				<div class="detail-stat"><small>Avg PM2.5 (${rangeLabel})</small><strong>${isNum(pm25Avg) ? `${pm25Avg.toFixed(1)} <span>µg/m³</span>` : '--'}</strong><span>${isNum(state.sensors.pm25) ? `Live: ${Math.round(state.sensors.pm25)} µg/m³` : 'no live data'}</span></div>
+				<div class="detail-stat"><small>Avg Temperature</small><strong>${isNum(tempAvg) ? `${tempAvg.toFixed(1)} <span>°C</span>` : '--'}</strong><span>${isNum(humAvg) ? `Avg Humidity: ${humAvg.toFixed(1)}%` : '--'}</span></div>
 				<div class="detail-stat"><small>Alert events</small><strong>${state.alerts.length}</strong><span>recorded events</span></div>
 			</section>
-			<section class="panel chart-panel"><div class="panel-header"><div><h2>Environmental &amp; AI readings</h2><p>${rangeLabel} · updated ${formatTime(state.sensorUpdatedAt)}</p></div><span class="timestamp">${icon('clock')} ${rangeLabel}</span></div><div class="chart-legend"><span><i class="legend-mark"></i>PM2.5</span><span><i class="legend-mark temp"></i>Temperature (×2)</span></div>${makeRealChart('env')}</section>
-			<div class="section-label">Report summary table</div><section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Metric</th><th>Current</th><th>Threshold / Target</th><th>Status</th></tr></thead><tbody><tr><td data-label="Metric"><strong>PM2.5 Air Quality</strong></td><td data-label="Current">${isNum(state.sensors.pm25) ? `${Math.round(state.sensors.pm25)} µg/m³` : '--'}</td><td data-label="Threshold">&lt; ${state.thresholds.pm25Warning} µg/m³</td><td data-label="Status">${statusPill(severityLabel(severityFor('pm25', state.sensors.pm25)), severityFor('pm25', state.sensors.pm25))}</td></tr><tr><td data-label="Metric"><strong>Temperature</strong></td><td data-label="Current">${isNum(state.sensors.temperature) ? `${state.sensors.temperature.toFixed(1)}°C` : '--'}</td><td data-label="Threshold">&lt; ${state.thresholds.tempWarning}°C</td><td data-label="Status">${statusPill(severityLabel(severityFor('temperature', state.sensors.temperature)), severityFor('temperature', state.sensors.temperature))}</td></tr><tr><td data-label="Metric"><strong>Humidity</strong></td><td data-label="Current">${isNum(state.sensors.humidity) ? `${Math.round(state.sensors.humidity)}%` : '--'}</td><td data-label="Threshold">${state.thresholds.humidityLow}–${state.thresholds.humidityHigh}%</td><td data-label="Status">${statusPill(severityLabel(severityFor('humidity', state.sensors.humidity)), severityFor('humidity', state.sensors.humidity))}</td></tr><tr><td data-label="Metric"><strong>Edge Impulse Anomaly Score</strong></td><td data-label="Current">${isNum(state.edgeAi.anomalyScore) ? `${state.edgeAi.anomalyScore.toFixed(2)} (${esc(state.edgeAi.label)})` : '--'}</td><td data-label="Threshold">&lt; ${state.thresholds.anomalyWarning}</td><td data-label="Status">${statusPill(severityLabel(isNum(state.edgeAi.anomalyScore) ? state.edgeAi.status : 'offline'), isNum(state.edgeAi.anomalyScore) ? state.edgeAi.status : 'offline')}</td></tr></tbody></table></div></section>`;
+
+			<div class="section-label">Historical Telemetry Logs (${rangeLabel}) <span>Ready for direct Edge Impulse Studio upload (UTF-8, no BOM)</span></div>
+			<section class="panel">
+				<div class="panel-header">
+					<div><h2>Logged Sensor Samples (${logs.length} rows)</h2><p>Showing latest 25 rows preview · Click "Export Edge Impulse CSV" to download all ${logs.length} rows</p></div>
+					<span class="timestamp">${icon('clock')} ${rangeLabel}</span>
+				</div>
+				<div class="table-wrap">
+					<table class="data-table">
+						<thead>
+							<tr>
+								<th>Date &amp; Time</th>
+								<th>Device</th>
+								<th>PM2.5 (µg/m³)</th>
+								<th>PM10 (µg/m³)</th>
+								<th>Temp (°C)</th>
+								<th>Humidity (%)</th>
+								<th>Status</th>
+							</tr>
+						</thead>
+						<tbody>
+							${state.reportLoading
+								? `<tr><td colspan="7"><div class="empty-state">Fetching historical logs from ThingsBoard Cloud...</div></td></tr>`
+								: logs.length
+								? [...logs].reverse().slice(0, 25).map(row => {
+									const sev = row.ai_status === 'danger' ? 'danger' : row.ai_status === 'warning' ? 'warning' : 'normal';
+									return `<tr>
+										<td>${esc(formatDateTime(row.ts))}</td>
+										<td><strong>${esc(row.device)}</strong></td>
+										<td>${row.pm25.toFixed(1)}</td>
+										<td>${row.pm10.toFixed(1)}</td>
+										<td>${row.temperature.toFixed(1)}</td>
+										<td>${row.humidity.toFixed(1)}</td>
+										<td>${statusPill((row.ai_status || 'NORMAL').toUpperCase(), sev)}</td>
+									</tr>`;
+								}).join('')
+								: `<tr><td colspan="7"><div class="empty-state">No historical logs found for this period. Make sure your ThingsBoard JWT Token and Device UUID are set in <b>ESP32 &amp; IoT Hub</b>.</div></td></tr>`}
+						</tbody>
+					</table>
+				</div>
+			</section>
+
+			<section class="panel chart-panel"><div class="panel-header"><div><h2>Live Telemetry Trend</h2><p>Recent buffer · updated ${formatTime(state.sensorUpdatedAt)}</p></div></div><div class="chart-legend"><span><i class="legend-mark"></i>PM2.5</span><span><i class="legend-mark temp"></i>Temperature (×2)</span></div>${makeRealChart('env')}</section>`;
 	}
 
 	function generateEsp32CodeSnippet() {
@@ -892,8 +1089,6 @@
  */
 #include <WiFi.h>
 #include <PubSubClient.h>
-// Include your exported Edge Impulse Arduino Library:
-// #include <${(cfg.eiProjectName || 'factory_ai').replace(/[^a-zA-Z0-9_]/g, '_')}_inferencing.h>
 
 const char* WIFI_SSID = "YOUR_FACTORY_WIFI_SSID";
 const char* WIFI_PASS = "YOUR_FACTORY_WIFI_PASSWORD";
@@ -904,50 +1099,18 @@ const char* TB_TOKEN  = "YOUR_THINGSBOARD_DEVICE_ACCESS_TOKEN";
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
 
-void connectWiFi() {
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); }
-}
-
-void connectThingsBoard() {
-  while (!mqtt.connected()) {
-    if (!mqtt.connect("${firstDev}", TB_TOKEN, NULL)) {
-      delay(2000);
-    }
-  }
-}
-
 void setup() {
   Serial.begin(115200);
-  connectWiFi();
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); }
   mqtt.setServer(TB_SERVER, TB_PORT);
 }
 
 void loop() {
-  if (!mqtt.connected()) connectThingsBoard();
+  if (!mqtt.connected()) {
+    if (!mqtt.connect("${firstDev}", TB_TOKEN, NULL)) { delay(2000); return; }
+  }
   mqtt.loop();
-
-  // Read real physical sensors (e.g., TPM5003/PMS5003, DHT22)
-  float pm25 = readPM25();
-  float pm10 = readPM10();
-  float temperature = readTemperature();
-  float humidity = readHumidity();
-
-  // Run Edge Impulse TinyML classifier: run_classifier(&signal, &result, false);
-  float anomaly_score = getEdgeImpulseAnomalyScore();
-  float ai_confidence = getEdgeImpulseTopConfidence();
-  const char* ai_label = getEdgeImpulseTopLabel();
-  const char* ai_status = (anomaly_score >= ${state.thresholds.anomalyDanger}) ? "danger"
-                        : (anomaly_score >= ${state.thresholds.anomalyWarning}) ? "warning" : "normal";
-
-  // Publish JSON telemetry to ThingsBoard topic: v1/devices/me/telemetry
-  char payload[320];
-  snprintf(payload, sizeof(payload),
-    "{\\"pm25\\":%.1f,\\"pm10\\":%.1f,\\"temperature\\":%.1f,\\"humidity\\":%.1f,\\"ai_status\\":\\"%s\\",\\"ai_label\\":\\"%s\\",\\"anomaly_score\\":%.2f,\\"ai_confidence\\":%.2f}",
-    pm25, pm10, temperature, humidity, ai_status, ai_label, anomaly_score, ai_confidence
-  );
-
-  mqtt.publish("v1/devices/me/telemetry", payload);
   delay(3000);
 }`;
 	}
@@ -965,7 +1128,7 @@ void loop() {
 			<div class="settings-grid">
 				<div>
 					<section class="panel settings-section">
-						<div class="panel-header"><div><h2>1. ThingsBoard API Connection</h2><p>Required to fetch live telemetry and push LED thresholds to ThingsBoard</p></div>${statusPill(state.tbConnection.status.toUpperCase(), state.tbConnection.status === 'connected' ? 'normal' : state.tbConnection.status === 'error' ? 'danger' : 'offline')}</div>
+						<div class="panel-header"><div><h2>1. ThingsBoard API Connection</h2><p>Required to fetch live &amp; historical telemetry and push LED thresholds</p></div>${statusPill(state.tbConnection.status.toUpperCase(), state.tbConnection.status === 'connected' ? 'normal' : state.tbConnection.status === 'error' ? 'danger' : 'offline')}</div>
 						<div class="settings-body">
 							<div class="field"><label for="iot-tb-host">ThingsBoard Host URL</label><input id="iot-tb-host" value="${esc(cfg.tbHost)}" placeholder="https://thingsboard.cloud"></div>
 							<div class="field"><label for="iot-tb-poll">REST Poll Interval (ms)</label><input id="iot-tb-poll" type="number" min="1000" step="500" value="${cfg.tbPollIntervalMs}"></div>
@@ -1072,7 +1235,7 @@ void loop() {
 		return `<div class="page-heading"><div><p class="eyebrow">SYSTEM CONFIGURATION</p><h1>Settings</h1><p>Manage sensor &amp; Edge AI alert thresholds (auto-syncs to ThingsBoard &amp; ESP32 LEDs).</p></div><div class="heading-actions"><button class="button button-secondary" data-route="integrations">${icon('link')} ESP32 &amp; ThingsBoard Setup</button><button class="button button-primary" data-action="save-settings">Save all changes</button></div></div>
 			<div class="settings-grid"><div>
 			<section class="panel settings-section">
-				<div class="panel-header"><div><h2>Sensor &amp; Edge AI thresholds</h2><p>Syncs directly to ThingsBoard Shared Attributes &amp; ESP32-S3</p></div>
+				<div class="panel-header"><div><h2>Sensor &amp; Edge AI thresholds</h2><p>Syncs directly to ThingsBoard &amp; ESP32-S3 immediately</p></div>
 				<div style="display:flex;gap:5px"><button type="button" class="filter-chip" data-preset-thresh="standard">Standard</button><button type="button" class="filter-chip" data-preset-thresh="strict">Cleanroom</button></div></div>
 				<form id="threshold-form" class="settings-body">
 					<div class="field"><label for="pm25-warning">PM2.5 warning (µg/m³)</label><input id="pm25-warning" type="number" step="0.1" min="0" value="${state.thresholds.pm25Warning}" required></div>
@@ -1176,6 +1339,9 @@ void loop() {
 		$('#sidebar').classList.remove('mobile-open');
 		$$('.dropdown-menu').forEach(menu => menu.classList.remove('is-open'));
 		renderPage();
+		if (route === 'reports') {
+			fetchThingsBoardHistory(false);
+		}
 		$('#page-content').focus({ preventScroll: true });
 		window.scrollTo({ top: 0, behavior: 'smooth' });
 	}
@@ -1244,6 +1410,51 @@ void loop() {
 		link.click();
 		URL.revokeObjectURL(link.href);
 		showToast(`${filename} exported.`);
+	}
+
+	// ส่งออกไฟล์ CSV สำหรับอัปโหลดเข้า Edge Impulse Studio โดยตรง (ไม่มี BOM และไม่มีเครื่องหมายคำพูด ")
+	function exportEdgeImpulseCsv() {
+		const logs = getExportableLogs();
+		if (!logs.length) {
+			showToast('No sensor log records available to export yet.', 'warning');
+			return;
+		}
+		const lines = ['pm25,pm10,temperature,humidity'];
+		logs.forEach(r => {
+			lines.push(`${r.pm25.toFixed(1)},${r.pm10.toFixed(1)},${r.temperature.toFixed(1)},${r.humidity.toFixed(1)}`);
+		});
+		const csv = lines.join('\n');
+		const dateTag = new Date().toISOString().slice(0, 10);
+		const filename = `edge-impulse-data-${dateTag}.csv`;
+		const link = document.createElement('a');
+		link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+		link.download = filename;
+		link.click();
+		URL.revokeObjectURL(link.href);
+		showToast(`Exported ${logs.length} samples to ${filename} (Edge Impulse ready).`);
+	}
+
+	function exportHistoricalReportCsv() {
+		const logs = getExportableLogs();
+		if (!logs.length) {
+			showToast('No historical logs available to export yet.', 'warning');
+			return;
+		}
+		const dateTag = new Date().toISOString().slice(0, 10);
+		exportCsv(`factory-historical-report-${dateTag}.csv`, [
+			['Timestamp_MS', 'Date_Time', 'Device', 'PM2.5_ugm3', 'PM10_ugm3', 'Temperature_C', 'Humidity_Pct', 'Status', 'Anomaly_Score'],
+			...logs.map(r => [
+				r.ts,
+				formatDateTime(r.ts),
+				r.device,
+				r.pm25.toFixed(1),
+				r.pm10.toFixed(1),
+				r.temperature.toFixed(1),
+				r.humidity.toFixed(1),
+				r.ai_status || 'normal',
+				isNum(r.anomaly_score) ? r.anomaly_score.toFixed(2) : ''
+			])
+		]);
 	}
 
 	function downloadTextFile(filename, content) {
@@ -1426,10 +1637,12 @@ void loop() {
 					showToast('Syncing live telemetry from ThingsBoard...');
 				}
 			}
+			if (name === 'refresh-history') fetchThingsBoardHistory(true);
+			if (name === 'export-ei-csv') exportEdgeImpulseCsv();
+			if (name === 'export-report') exportHistoricalReportCsv();
 			if (name === 'back-machines') { state.activeMachine = null; renderPage(); }
 			if (name === 'export-alerts') exportAlerts();
 			if (name === 'export-machines') exportMachines();
-			if (name === 'export-report') exportCsv('factory-alert-report.csv', [['Metric', 'Current value', 'Status'], ['PM2.5', isNum(state.sensors.pm25) ? state.sensors.pm25 : '--', severityLabel(severityFor('pm25', state.sensors.pm25))], ['PM10', isNum(state.sensors.pm10) ? state.sensors.pm10 : '--', severityLabel(severityFor('pm10', state.sensors.pm10))], ['Temperature °C', isNum(state.sensors.temperature) ? state.sensors.temperature.toFixed(1) : '--', severityLabel(severityFor('temperature', state.sensors.temperature))], ['Humidity %', isNum(state.sensors.humidity) ? state.sensors.humidity : '--', severityLabel(severityFor('humidity', state.sensors.humidity))], ['Edge AI Anomaly Score', isNum(state.edgeAi.anomalyScore) ? state.edgeAi.anomalyScore : '--', severityLabel(isNum(state.edgeAi.anomalyScore) ? state.edgeAi.status : 'offline')]]);
 			if (name === 'pdf-report') window.print();
 			if (name === 'save-settings') { const form = $('#threshold-form'); if (saveThresholds(form, false)) { renderPage(); } }
 			if (name === 'save-iot-config') saveIotConfiguration();
@@ -1487,11 +1700,11 @@ void loop() {
 		}
 		if (event.target.matches('[data-action="report-range"]')) {
 			state.reportRange = event.target.value;
-			renderPage();
+			fetchThingsBoardHistory(false);
 		}
 		if (event.target.matches('[data-report-date]')) {
 			state[event.target.dataset.reportDate === 'start' ? 'reportStartDate' : 'reportEndDate'] = event.target.value;
-			renderPage();
+			fetchThingsBoardHistory(false);
 		}
 		if (event.target.id === 'dark-mode-toggle') {
 			state.theme = event.target.checked ? 'dark' : 'light';
